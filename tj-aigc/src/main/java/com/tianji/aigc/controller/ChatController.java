@@ -1,7 +1,7 @@
 package com.tianji.aigc.controller;
 
 import com.tianji.aigc.service.ChatService;
-import com.tianji.dto.ChatDTO;
+import com.tianji.aigc.dto.ChatDTO;
 import com.tianji.aigc.vo.ChatEventVO;
 import com.tianji.common.annotations.NoWrapper;
 import lombok.RequiredArgsConstructor;
