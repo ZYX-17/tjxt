@@ -34,3 +34,4 @@ tj:
           timeout-ms: 20000
     memory:
       max: 100 #存储最大的聊天记录数
+      type: MYSQL # 聊天记录存储类型 MYSQL 或 Redis 或 MongoDB
