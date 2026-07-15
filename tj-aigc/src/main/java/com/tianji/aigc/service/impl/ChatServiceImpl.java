@@ -9,6 +9,7 @@ import com.tianji.aigc.config.ToolResultHolder;
 import com.tianji.aigc.constants.Constant;
 import com.tianji.aigc.enums.ChatEventTypeEnum;
 import com.tianji.aigc.service.ChatService;
+import com.tianji.aigc.service.ChatSessionService;
 import com.tianji.aigc.vo.ChatEventVO;
 import com.tianji.common.utils.UserContext;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,7 @@ public class ChatServiceImpl implements ChatService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ChatMemory chatMemory;
     private final VectorStore vectorStore;
+    private final ChatSessionService chatSessionService;
 
     private static final String GENERATE_STATUS_KEY = "GENERATE_STATUS";
     // 输出结束的标记
@@ -52,6 +54,9 @@ public class ChatServiceImpl implements ChatService {
         var hasOps = this.stringRedisTemplate.boundHashOps(GENERATE_STATUS_KEY);
         var requestId = IdUtil.fastSimpleUUID();
         var userId = UserContext.getUser();
+        // 异步更新会话信息
+        this.chatSessionService.update(sessionId, question, userId);
+
         var qaAdvisor = QuestionAnswerAdvisor.builder(this.vectorStore)
                 .searchRequest(SearchRequest.builder().similarityThreshold(0.6d).topK(6).build())
                 .build();
