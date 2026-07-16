@@ -1,10 +1,8 @@
-package com.tianji.aigc.service.impl;
+package com.tianji.aigc.agent;
 
 import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
-import com.tianji.aigc.config.SystemPromptConfig;
 import com.tianji.aigc.config.ToolResultHolder;
 import com.tianji.aigc.constants.Constant;
 import com.tianji.aigc.enums.ChatEventTypeEnum;
@@ -12,68 +10,66 @@ import com.tianji.aigc.service.ChatService;
 import com.tianji.aigc.service.ChatSessionService;
 import com.tianji.aigc.vo.ChatEventVO;
 import com.tianji.common.utils.UserContext;
-import lombok.RequiredArgsConstructor;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Map;
-
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
-@Service
-@RequiredArgsConstructor
-@ConditionalOnProperty(prefix = "tj.ai", name = "chat-type", havingValue = "ENHANCE")
-public class ChatServiceImpl implements ChatService {
+public abstract class AbstractAgent implements Agent {
 
-    private final ChatClient chatClient;
-    private final SystemPromptConfig systemPromptConfig;
-    private final StringRedisTemplate stringRedisTemplate;
-    private final ChatMemory chatMemory;
-    private final VectorStore vectorStore;
-    private final ChatSessionService chatSessionService;
-
-    private static final String GENERATE_STATUS_KEY = "GENERATE_STATUS";
+    @Resource
+    private ChatSessionService chatSessionService;
+    @Resource
+    private ChatClient chatClient;
+    @Resource
+    private ChatMemory chatMemory;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
     // 输出结束的标记
-    private static final ChatEventVO STOP_EVENT = ChatEventVO.builder().eventType(ChatEventTypeEnum.STOP.getValue()).build();
-
+    public static final ChatEventVO STOP_EVENT = ChatEventVO.builder().eventType(ChatEventTypeEnum.STOP.getValue()).build();
+    private static final String GENERATE_STATUS_KEY = "GENERATE_STATUS";
 
 
     @Override
-    public Flux<ChatEventVO> chat(String question, String sessionId) {
-        var conversationId = ChatService.getConversationId(sessionId);
-        var outputBuilder = new StringBuilder();
-        var hasOps = this.stringRedisTemplate.boundHashOps(GENERATE_STATUS_KEY);
-        var requestId = IdUtil.fastSimpleUUID();
+    public String process(String question, String sessionId) {
+        // 获取用户id
         var userId = UserContext.getUser();
-        // 异步更新会话信息
+        var requestId = this.generateRequestId();
+
+        //更新会话时间
         this.chatSessionService.update(sessionId, question, userId);
 
-        var qaAdvisor = QuestionAnswerAdvisor.builder(this.vectorStore)
-                .searchRequest(SearchRequest.builder().similarityThreshold(0.6d).topK(6).build())
-                .build();
+        return this.getChatClientRequest(sessionId, requestId, question)
+                .call()
+                .content();
+    }
 
-        return this.chatClient.prompt()
-                .system(promptSystem -> promptSystem
-                        .text(this.systemPromptConfig.getChatSystemMessage().get())
-                        .param("now", DateUtil.now())
-                )
-                .advisors(advisor -> advisor
-                        // 设置RAG增强
-                        .advisors(qaAdvisor)
-                        .param(ChatMemory.CONVERSATION_ID, conversationId))
-                .toolContext(Map.of(Constant.REQUEST_ID, requestId, Constant.USER_ID, userId)) //通过工具上下文传递参数
-                .user(question)
+    public Flux<ChatEventVO> processStream(String question, String sessionId) {
+
+
+        // 获取用户id
+        var userId = UserContext.getUser();
+        var requestId = this.generateRequestId();
+        // 大模型输出内容的缓存器，用于在输出中断后的数据存储
+        var outputBuilder = new StringBuilder();
+        // 获取对话id
+        var conversationId = ChatService.getConversationId(sessionId);
+        var hasOps = this.stringRedisTemplate.boundHashOps(GENERATE_STATUS_KEY);
+
+
+        //更新会话时间
+        this.chatSessionService.update(sessionId, question, userId);
+
+        return this.getChatClientRequest(sessionId, requestId, question)
                 .stream()
                 .chatResponse()
                 .doFirst(() -> hasOps.put(sessionId, "true")) // 第一次输出内容时执行
@@ -89,9 +85,12 @@ public class ChatServiceImpl implements ChatService {
                         var messageId = chatResponse.getMetadata().getId();
                         ToolResultHolder.put(messageId, Constant.REQUEST_ID, requestId);
                     }
-                    String text = chatResponse.getResult().getOutput().getText();
+
+                    // 获取大模型的输出的内容
+                    var text = chatResponse.getResult().getOutput().getText();
                     // 追加到输出内容中
                     outputBuilder.append(text);
+                    // 封装响应对象
                     return ChatEventVO.builder()
                             .eventData(text)
                             .eventType(ChatEventTypeEnum.DATA.getValue())
@@ -114,13 +113,13 @@ public class ChatServiceImpl implements ChatService {
                 }));
     }
 
-
-    @Override
-    public void stop(String sessionId) {
-        // 移除标记
-        var hasOps = this.stringRedisTemplate.boundHashOps(GENERATE_STATUS_KEY);
-
-        hasOps.delete(sessionId);
+    private ChatClient.ChatClientRequestSpec getChatClientRequest(String sessionId, String requestId, String question) {
+        return this.chatClient.prompt()
+                .system(promptSystem -> promptSystem.text(this.systemMessage()).params(this.systemMessageParams()))
+                .advisors(advisor -> advisor.advisors(this.advisors()).params(this.advisorParams(sessionId, requestId)))
+                .tools(this.tools())
+                .toolContext(this.toolContext(sessionId, requestId))
+                .user(question);
     }
 
     /**
@@ -133,6 +132,20 @@ public class ChatServiceImpl implements ChatService {
         this.chatMemory.add(conversationId, List.of(new UserMessage(question), new AssistantMessage(content)));
     }
 
+    private String generateRequestId() {
+        return IdUtil.fastSimpleUUID();
+    }
 
+    @Override
+    public Map<String, Object> advisorParams(String sessionId, String requestId) {
+        var conversationId = ChatService.getConversationId(sessionId);
+        return Map.of(ChatMemory.CONVERSATION_ID, conversationId);
+    }
 
+    @Override
+    public void stop(String sessionId) {
+        // 移除标记
+        var hasOps = this.stringRedisTemplate.boundHashOps(GENERATE_STATUS_KEY);
+        hasOps.delete(sessionId);
+    }
 }

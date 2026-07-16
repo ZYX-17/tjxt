@@ -6,6 +6,7 @@ import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.tianji.aigc.entity.ChatRecord;
 import com.tianji.aigc.memory.MessageUtil;
+import com.tianji.aigc.memory.MyChatMemoryRepository;
 import com.tianji.aigc.service.ChatRecordService;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.Message;
@@ -14,7 +15,7 @@ import jakarta.annotation.Resource;
 import java.sql.Wrapper;
 import java.util.List;
 
-public class JdbcChatMemoryRepository implements ChatMemoryRepository {
+public class JdbcChatMemoryRepository implements ChatMemoryRepository, MyChatMemoryRepository {
 
     @Resource
     private ChatRecordService chatRecordService;
@@ -51,6 +52,15 @@ public class JdbcChatMemoryRepository implements ChatMemoryRepository {
     @Override
     public void deleteByConversationId(String conversationId) {
         var queryWrapper = Wrappers.<ChatRecord>lambdaQuery().eq(ChatRecord::getConversationId, conversationId);
+        this.chatRecordService.remove(queryWrapper);
+    }
+
+    @Override
+    public void optimization(String conversationId) {
+        var queryWrapper = Wrappers.<ChatRecord>lambdaQuery()
+                .eq(ChatRecord::getConversationId, conversationId)
+                .orderByDesc(ChatRecord::getId)
+                .last("limit 2");
         this.chatRecordService.remove(queryWrapper);
     }
 }
