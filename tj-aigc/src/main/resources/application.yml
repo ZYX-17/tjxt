@@ -42,9 +42,13 @@ tj:
           data-id: consult-agent-system-message.txt
         knowledge-agent:
           data-id: knowledge-agent-system-message.txt
+        text:
+          data-id: text-system-chat-message.txt
     memory:
       max: 100 #存储最大的聊天记录数
       type: MYSQL # 聊天记录存储类型 MYSQL 或 Redis 或 MongoDB
 
-    chat-type: ROUTE # ROUTE / ENHANCE / APP
+
+
+    chat-type: ENHANCE # ROUTE / ENHANCE / APP
 

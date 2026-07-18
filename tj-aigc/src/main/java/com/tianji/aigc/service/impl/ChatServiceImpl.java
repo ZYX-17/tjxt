@@ -47,7 +47,7 @@ public class ChatServiceImpl implements ChatService {
     // 输出结束的标记
     private static final ChatEventVO STOP_EVENT = ChatEventVO.builder().eventType(ChatEventTypeEnum.STOP.getValue()).build();
 
-
+    private final ChatClient openAiChatClient;
 
     @Override
     public Flux<ChatEventVO> chat(String question, String sessionId) {
@@ -123,6 +123,7 @@ public class ChatServiceImpl implements ChatService {
         hasOps.delete(sessionId);
     }
 
+
     /**
      * 保存停止输出的记录
      *
@@ -131,6 +132,16 @@ public class ChatServiceImpl implements ChatService {
      */
     private void saveStopHistoryRecord(String conversationId, String question, String content) {
         this.chatMemory.add(conversationId, List.of(new UserMessage(question), new AssistantMessage(content)));
+    }
+
+
+    @Override
+    public String chatText(String question) {
+        return this.openAiChatClient.prompt()
+                .system(promptSystem -> promptSystem.text(this.systemPromptConfig.getTextSystemMessage().get()))
+                .user(question)
+                .call()
+                .content();
     }
 
 
